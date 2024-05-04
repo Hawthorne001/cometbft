@@ -2,12 +2,12 @@ package statesync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	dbm "github.com/cometbft/cometbft-db"
-
+	cmtstate "github.com/cometbft/cometbft/api/cometbft/state/v1"
 	sm "github.com/cometbft/cometbft/internal/state"
 	cmtsync "github.com/cometbft/cometbft/internal/sync"
 	"github.com/cometbft/cometbft/libs/log"
@@ -16,9 +16,9 @@ import (
 	lighthttp "github.com/cometbft/cometbft/light/provider/http"
 	lightrpc "github.com/cometbft/cometbft/light/rpc"
 	lightdb "github.com/cometbft/cometbft/light/store/db"
-	cmtstate "github.com/cometbft/cometbft/proto/tendermint/state"
 	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	"github.com/cometbft/cometbft/types"
+	cmttime "github.com/cometbft/cometbft/types/time"
 	"github.com/cometbft/cometbft/version"
 )
 
@@ -91,7 +91,7 @@ func (s *lightClientStateProvider) AppHash(ctx context.Context, height uint64) (
 	defer s.Unlock()
 
 	// We have to fetch the next height, which contains the app hash for the previous height.
-	header, err := s.lc.VerifyLightBlockAtHeight(ctx, int64(height+1), time.Now())
+	header, err := s.lc.VerifyLightBlockAtHeight(ctx, int64(height+1), cmttime.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func (s *lightClientStateProvider) AppHash(ctx context.Context, height uint64) (
 	// breaking it. We should instead have a Has(ctx, height) method which checks
 	// that the state provider has access to the necessary data for the height.
 	// We piggyback on AppHash() since it's called when adding snapshots to the pool.
-	_, err = s.lc.VerifyLightBlockAtHeight(ctx, int64(height+2), time.Now())
+	_, err = s.lc.VerifyLightBlockAtHeight(ctx, int64(height+2), cmttime.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func (s *lightClientStateProvider) AppHash(ctx context.Context, height uint64) (
 func (s *lightClientStateProvider) Commit(ctx context.Context, height uint64) (*types.Commit, error) {
 	s.Lock()
 	defer s.Unlock()
-	header, err := s.lc.VerifyLightBlockAtHeight(ctx, int64(height), time.Now())
+	header, err := s.lc.VerifyLightBlockAtHeight(ctx, int64(height), cmttime.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -143,22 +143,22 @@ func (s *lightClientStateProvider) State(ctx context.Context, height uint64) (sm
 	//
 	// We need to fetch the NextValidators from height+2 because if the application changed
 	// the validator set at the snapshot height then this only takes effect at height+2.
-	lastLightBlock, err := s.lc.VerifyLightBlockAtHeight(ctx, int64(height), time.Now())
+	lastLightBlock, err := s.lc.VerifyLightBlockAtHeight(ctx, int64(height), cmttime.Now())
 	if err != nil {
 		return sm.State{}, err
 	}
-	currentLightBlock, err := s.lc.VerifyLightBlockAtHeight(ctx, int64(height+1), time.Now())
+	currentLightBlock, err := s.lc.VerifyLightBlockAtHeight(ctx, int64(height+1), cmttime.Now())
 	if err != nil {
 		return sm.State{}, err
 	}
-	nextLightBlock, err := s.lc.VerifyLightBlockAtHeight(ctx, int64(height+2), time.Now())
+	nextLightBlock, err := s.lc.VerifyLightBlockAtHeight(ctx, int64(height+2), cmttime.Now())
 	if err != nil {
 		return sm.State{}, err
 	}
 
 	state.Version = cmtstate.Version{
 		Consensus: currentLightBlock.Version,
-		Software:  version.TMCoreSemVer,
+		Software:  version.CMTSemVer,
 	}
 	state.LastBlockHeight = lastLightBlock.Height
 	state.LastBlockTime = lastLightBlock.Time
@@ -173,7 +173,7 @@ func (s *lightClientStateProvider) State(ctx context.Context, height uint64) (sm
 	// We'll also need to fetch consensus params via RPC, using light client verification.
 	primaryURL, ok := s.providers[s.lc.Primary()]
 	if !ok || primaryURL == "" {
-		return sm.State{}, fmt.Errorf("could not find address for primary light client provider")
+		return sm.State{}, errors.New("could not find address for primary light client provider")
 	}
 	primaryRPC, err := rpcClient(primaryURL)
 	if err != nil {
@@ -191,7 +191,7 @@ func (s *lightClientStateProvider) State(ctx context.Context, height uint64) (sm
 	return state, nil
 }
 
-// rpcClient sets up a new RPC client
+// rpcClient sets up a new RPC client.
 func rpcClient(server string) (*rpchttp.HTTP, error) {
 	if !strings.Contains(server, "://") {
 		server = "http://" + server
